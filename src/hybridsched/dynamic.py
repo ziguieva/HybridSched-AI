@@ -193,40 +193,70 @@ class DynamicHybridSimulator:
             self._start(job, cluster, now)
 
     def _rolling_plan(self, now):
-        """Optimize only currently waiting jobs.
+        """Plan waiting jobs around actual running reservations.
 
-        Already running jobs are not moved. Their
-        resource use is conservatively held constant
-        during the planning horizon.
+        Running tasks are fixed; waiting tasks can be
+        scheduled after their resources are released.
         """
-
         if not self.waiting:
-            return []
+            return "EMPTY", []
 
         model = cp_model.CpModel()
-        jobs = self.waiting
+        jobs = list(self.waiting)
 
-        horizon = now + sum(
-            max(
-                c.execution_time(j.requested_walltime_s)
-                for c in self.clusters
-                if j.resources.fits_in(c.capacity)
+        remaining = max(
+            (finish - now for finish, _, _, _ in self.running),
+            default=0,
+        )
+
+        horizon = (
+            now
+            + remaining
+            + sum(
+                max(
+                    c.execution_time(j.requested_walltime_s)
+                    for c in self.clusters
+                    if j.resources.fits_in(c.capacity)
+                )
+                for j in jobs
             )
-            for j in jobs
+            + 1
         )
 
         starts = {}
         ends = {}
         choices = {}
+        costs = {}
+        tardiness = []
+
         intervals = {c.name: [] for c in self.clusters}
         cpu = {c.name: [] for c in self.clusters}
         gpu = {c.name: [] for c in self.clusters}
         memory = {c.name: [] for c in self.clusters}
-        costs = {}
-        tardiness = []
+
+        # Running jobs are compulsory fixed intervals.
+        # No migration or preemption is allowed.
+        for finish, jid, cluster_name, job in self.running:
+            duration = finish - now
+
+            if duration <= 0:
+                continue
+
+            fixed = model.new_interval_var(
+                now,
+                duration,
+                finish,
+                f"running_{jid}",
+            )
+
+            intervals[cluster_name].append(fixed)
+            cpu[cluster_name].append(job.resources.cpu_cores)
+            gpu[cluster_name].append(job.resources.gpus)
+            memory[cluster_name].append(job.resources.memory_gib)
 
         for job in jobs:
             jid = job.job_id
+
             starts[jid] = model.new_int_var(
                 now, horizon, f"start_{jid}"
             )
@@ -237,16 +267,13 @@ class DynamicHybridSimulator:
             alternatives = []
 
             for cluster in self.clusters:
-                if not job.resources.fits_in(
-                    self._available(cluster)
-                ):
+                if not job.resources.fits_in(cluster.capacity):
                     continue
 
                 key = (jid, cluster.name)
                 selected = model.new_bool_var(
-                    f"assign_{jid}_{cluster.name}"
+                    f"place_{jid}_{cluster.name}"
                 )
-
                 duration = cluster.execution_time(
                     job.requested_walltime_s
                 )
@@ -256,39 +283,31 @@ class DynamicHybridSimulator:
                     duration,
                     ends[jid],
                     selected,
-                    f"interval_{jid}_{cluster.name}",
+                    f"waiting_{jid}_{cluster.name}",
                 )
-
-                model.add(
-                    ends[jid] <= horizon
-                ).only_enforce_if(selected)
 
                 choices[key] = selected
                 alternatives.append(selected)
                 intervals[cluster.name].append(interval)
-
-                cpu[cluster.name].append(
-                    job.resources.cpu_cores
-                )
-                gpu[cluster.name].append(
-                    job.resources.gpus
-                )
-                memory[cluster.name].append(
-                    job.resources.memory_gib
-                )
+                cpu[cluster.name].append(job.resources.cpu_cores)
+                gpu[cluster.name].append(job.resources.gpus)
+                memory[cluster.name].append(job.resources.memory_gib)
 
                 costs[key] = cluster.execution_cost(
                     job.resources, duration
                 )
 
             if not alternatives:
-                return []
+                raise RuntimeError(
+                    f"No compatible cluster for {jid}"
+                )
 
             model.add_exactly_one(alternatives)
 
             if job.deadline_s is not None:
                 late = model.new_int_var(
-                    0, horizon,
+                    0,
+                    max(0, horizon - job.deadline_s),
                     f"late_{jid}",
                 )
                 model.add_max_equality(
@@ -297,19 +316,19 @@ class DynamicHybridSimulator:
                 )
                 tardiness.append(late)
 
+        # Use full physical capacities, not instantaneous
+        # residual capacity. Fixed intervals account for
+        # current reservations over their remaining lives.
         for cluster in self.clusters:
             name = cluster.name
-            available = self._available(cluster)
 
             for demands, capacity in (
-                (cpu[name], available.cpu_cores),
-                (gpu[name], available.gpus),
-                (memory[name], available.memory_gib),
+                (cpu[name], cluster.capacity.cpu_cores),
+                (gpu[name], cluster.capacity.gpus),
+                (memory[name], cluster.capacity.memory_gib),
             ):
                 model.add_cumulative(
-                    intervals[name],
-                    demands,
-                    capacity,
+                    intervals[name], demands, capacity
                 )
 
         makespan = model.new_int_var(
@@ -344,12 +363,13 @@ class DynamicHybridSimulator:
         solver.parameters.random_seed = 42
 
         status = solver.solve(model)
+        status_name = solver.status_name(status)
 
         if status not in (
             cp_model.OPTIMAL,
             cp_model.FEASIBLE,
         ):
-            return []
+            return status_name, []
 
         plan = []
 
@@ -367,47 +387,64 @@ class DynamicHybridSimulator:
                     ))
                     break
 
-        return sorted(
-            plan,
+        plan.sort(
             key=lambda item: (
                 item[0], item[1].job_id
-            ),
+            )
         )
 
+        return status_name, plan
+
     def _rolling_dispatch(self, now):
-        """Commit only starts scheduled for the current event."""
+        """Apply only the starts scheduled at this instant.
 
-        while self.waiting:
-            plan = self._rolling_plan(now)
+        Return the next planned wake-up time, or None.
+        """
+        if not self.waiting:
+            return None
 
-            immediate = [
-                (job, cluster)
-                for start, job, cluster in plan
-                if start == now
-            ]
+        status, plan = self._rolling_plan(now)
 
-            if not immediate:
-                # Safe fallback if the optimization cannot
-                # provide an immediate feasible decision.
-                self._greedy_dispatch(now)
-                break
+        if status not in ("OPTIMAL", "FEASIBLE"):
+            # Solver failure: use a safe operational fallback.
+            self._greedy_dispatch(now)
+            return None
 
-            for job, cluster in immediate:
-                if job in self.waiting and job.resources.fits_in(
-                    self._available(cluster)
-                ):
-                    self.waiting.remove(job)
-                    self._start(job, cluster, now)
+        future_starts = []
+
+        for start, job, cluster in plan:
+            if start > now:
+                future_starts.append(start)
+                continue
+
+            if start < now:
+                raise RuntimeError(
+                    "Planner returned a past start"
+                )
+
+            if job not in self.waiting:
+                continue
+
+            if not job.resources.fits_in(
+                self._available(cluster)
+            ):
+                raise RuntimeError(
+                    "Invalid CP-SAT simultaneous allocation"
+                )
+
+            self.waiting.remove(job)
+            self._start(job, cluster, now)
+
+        return min(future_starts) if future_starts else None
 
     def run(self):
         if self._run_completed:
-            raise RuntimeError(
-                "Simulation can only run once"
-            )
+            raise RuntimeError("Simulation can only run once")
 
         self._run_completed = True
         index = 0
         total = len(self.jobs)
+        planned_wakeup = None
 
         while index < total or self.running or self.waiting:
             arrival_time = (
@@ -422,14 +459,22 @@ class DynamicHybridSimulator:
                 else float("inf")
             )
 
-            now = min(arrival_time, finish_time)
+            wake_time = (
+                planned_wakeup
+                if planned_wakeup is not None
+                else float("inf")
+            )
+
+            now = min(arrival_time, finish_time, wake_time)
 
             if now == float("inf"):
                 raise RuntimeError(
-                    "Unscheduled jobs remain with no future event"
+                    "No event can advance the simulation"
                 )
 
-            # Release completed tasks first.
+            planned_wakeup = None
+
+            # Release all completions at this time.
             while self.running and self.running[0][0] == now:
                 _, _, cluster_name, job = heapq.heappop(
                     self.running
@@ -439,7 +484,7 @@ class DynamicHybridSimulator:
                     self.used[cluster_name] - job.resources
                 )
 
-            # Only jobs already arrived are visible.
+            # Reveal arrivals only when they actually occur.
             while (
                 index < total
                 and self.jobs[index].arrival_s == now
@@ -448,28 +493,31 @@ class DynamicHybridSimulator:
                 index += 1
 
             if self.policy == "rolling":
-                self._rolling_dispatch(now)
+                planned_wakeup = self._rolling_dispatch(now)
             else:
                 self._greedy_dispatch(now)
 
-            if self.waiting and not self.running:
-                if index == total:
+            # A feasible rolling plan may deliberately
+            # schedule its next start before the next
+            # completion or arrival event.
+            if planned_wakeup is not None:
+                if planned_wakeup <= now:
                     raise RuntimeError(
-                        "Scheduling deadlock"
+                        "Non-advancing wake-up event"
                     )
 
+            if self.waiting and not self.running:
+                if index == total and planned_wakeup is None:
+                    raise RuntimeError("Scheduling deadlock")
+
         if len(self.results) != total:
-            raise RuntimeError(
-                "Incomplete simulation"
-            )
+            raise RuntimeError("Incomplete simulation")
 
         if any(
             self.used[c.name] != Resources()
             for c in self.clusters
         ):
-            raise RuntimeError(
-                "Resources not fully released"
-            )
+            raise RuntimeError("Resources not fully released")
 
         return sorted(
             self.results,
