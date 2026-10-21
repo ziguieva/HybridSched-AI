@@ -22,7 +22,12 @@ class JobResult:
 class FCFSSimulator:
     """First-Come, First-Served HPC scheduler."""
 
-    def __init__(self, cluster: Cluster, jobs: list[Job]):
+    def __init__(
+        self,
+        cluster: Cluster,
+        jobs: list[Job],
+        actual_runtimes_s: dict[str, int] | None = None,
+    ):
         if cluster.running_job_ids:
             raise ValueError("Cluster must initially be empty")
 
@@ -36,6 +41,26 @@ class FCFSSimulator:
                 raise ValueError(
                     f"Job {job.job_id} exceeds cluster capacity"
                 )
+
+        if actual_runtimes_s is not None:
+            if set(actual_runtimes_s) != set(ids):
+                raise ValueError(
+                    "Actual runtimes must match all job IDs"
+                )
+
+            if any(
+                type(value) is not int or value <= 0
+                for value in actual_runtimes_s.values()
+            ):
+                raise ValueError(
+                    "Actual runtimes must be positive integers"
+                )
+
+        self._actual_runtimes_s = (
+            dict(actual_runtimes_s)
+            if actual_runtimes_s is not None
+            else None
+        )
 
         self.env = simpy.Environment()
         self.cluster = cluster
@@ -69,9 +94,13 @@ class FCFSSimulator:
     def _execute(self, job: Job):
         start_s = int(self.env.now)
 
-        yield self.env.timeout(
-            job.requested_walltime_s
+        actual_duration = (
+            self._actual_runtimes_s[job.job_id]
+            if self._actual_runtimes_s is not None
+            else job.requested_walltime_s
         )
+
+        yield self.env.timeout(actual_duration)
 
         finish_s = int(self.env.now)
 

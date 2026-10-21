@@ -21,8 +21,17 @@ class EASYBackfillSimulator(FCFSSimulator):
     actual execution duration.
     """
 
-    def __init__(self, cluster: Cluster, jobs: list[Job]):
-        super().__init__(cluster, jobs)
+    def __init__(
+        self,
+        cluster: Cluster,
+        jobs: list[Job],
+        actual_runtimes_s: dict[str, int] | None = None,
+    ):
+        super().__init__(
+            cluster,
+            jobs,
+            actual_runtimes_s=actual_runtimes_s,
+        )
 
         self._active: dict[str, tuple[Job, int]] = {}
 
