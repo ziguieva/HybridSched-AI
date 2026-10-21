@@ -1,0 +1,16 @@
+{
+  "validation": {
+    "mae_p50_s": 45.683016255696614,
+    "p10_coverage": 0.08,
+    "p90_coverage": 0.9266666666666666,
+    "interval_coverage": 0.8466666666666667,
+    "mean_interval_width_s": 182.72781677246093
+  },
+  "test": {
+    "mae_p50_s": 53.21303990681966,
+    "p10_coverage": 0.08666666666666667,
+    "p90_coverage": 0.9266666666666666,
+    "interval_coverage": 0.84,
+    "mean_interval_width_s": 190.3404717763265
+  }
+}
