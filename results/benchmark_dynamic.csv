@@ -1,0 +1,4 @@
+policy,jobs,makespan_s,avg_wait_s,late_jobs,total_tardiness_s,cost_units,cloud_jobs
+FCFS-HYBRID,12,1120,0,0,0,42206,3
+SJF-HYBRID,12,1120,0,0,0,42206,3
+ROLLING-CP,12,1020,0,0,0,36214,2
