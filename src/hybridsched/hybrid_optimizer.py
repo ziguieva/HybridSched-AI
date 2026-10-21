@@ -1,4 +1,4 @@
-"""Offline hybrid cloud/HPC placement and scheduling optimization."""
+"""Hybrid cloud/HPC scheduling with deadlines and budgets."""
 
 from dataclasses import dataclass
 from math import isfinite
@@ -19,6 +19,7 @@ class HybridJobResult:
     waiting_s: int
     execution_s: int
     cost_units: int
+    tardiness_s: int = 0
 
 
 @dataclass(frozen=True)
@@ -28,6 +29,9 @@ class HybridOptimizationResult:
     makespan_s: int
     total_cost_units: int
     results: list[HybridJobResult]
+    total_tardiness_s: int = 0
+    deadline_violations: int = 0
+    cloud_cost_units: int = 0
 
 
 def optimize_hybrid(
@@ -37,8 +41,16 @@ def optimize_hybrid(
     wait_weight: int = 2,
     makespan_weight: int = 1,
     cost_weight: int = 1,
+    deadline_weight: int = 0,
+    max_budget_units: int | None = None,
+    max_cloud_budget_units: int | None = None,
+    hard_deadlines: bool = False,
 ) -> HybridOptimizationResult:
-    """Joint offline job placement and resource-constrained scheduling."""
+    """Optimize offline placement and scheduling.
+
+    All jobs and requested durations are known in advance.
+    Costs are synthetic units.
+    """
 
     if not clusters:
         raise ValueError("At least one cluster is required")
@@ -54,16 +66,37 @@ def optimize_hybrid(
     if not isfinite(time_limit_s) or time_limit_s <= 0:
         raise ValueError("Time limit must be positive")
 
-    weights = (wait_weight, makespan_weight, cost_weight)
+    weights = (
+        wait_weight,
+        makespan_weight,
+        cost_weight,
+        deadline_weight,
+    )
+
     if any(type(w) is not int or w < 0 for w in weights):
-        raise ValueError("Objective weights must be nonnegative")
+        raise ValueError("Weights must be nonnegative integers")
 
     if not any(weights):
-        raise ValueError("At least one objective weight is required")
+        raise ValueError("At least one weight must be positive")
+
+    for budget in (
+        max_budget_units,
+        max_cloud_budget_units,
+    ):
+        if budget is not None and (
+            type(budget) is not int or budget < 0
+        ):
+            raise ValueError(
+                "Budgets must be nonnegative integers"
+            )
 
     if not jobs:
         return HybridOptimizationResult(
-            "OPTIMAL", 0.0, 0, 0, []
+            status="OPTIMAL",
+            objective=0.0,
+            makespan_s=0,
+            total_cost_units=0,
+            results=[],
         )
 
     eligible = {}
@@ -86,7 +119,9 @@ def optimize_hybrid(
         max(job.arrival_s for job in jobs)
         + sum(
             max(
-                cluster.execution_time(job.requested_walltime_s)
+                cluster.execution_time(
+                    job.requested_walltime_s
+                )
                 for cluster in eligible[job.job_id]
             )
             for job in jobs
@@ -96,10 +131,11 @@ def optimize_hybrid(
     model = cp_model.CpModel()
 
     assignments = {}
-    completions = {}
     starts = {}
+    completions = {}
     durations = {}
     costs = {}
+    tardiness_vars = {}
 
     intervals_by_cluster = {
         cluster.name: [] for cluster in clusters
@@ -118,11 +154,15 @@ def optimize_hybrid(
         job_id = job.job_id
 
         start = model.new_int_var(
-            job.arrival_s, horizon, f"start_{job_id}"
+            job.arrival_s,
+            horizon,
+            f"start_{job_id}",
         )
 
         completion = model.new_int_var(
-            job.arrival_s, horizon, f"completion_{job_id}"
+            job.arrival_s,
+            horizon,
+            f"completion_{job_id}",
         )
 
         starts[job_id] = start
@@ -187,10 +227,30 @@ def optimize_hybrid(
 
         model.add_exactly_one(alternatives)
 
+        if job.deadline_s is not None:
+            if hard_deadlines:
+                model.add(
+                    completion <= job.deadline_s
+                )
+
+            tardiness = model.new_int_var(
+                0,
+                horizon,
+                f"tardiness_{job_id}",
+            )
+
+            model.add_max_equality(
+                tardiness,
+                [
+                    completion - job.deadline_s,
+                    0,
+                ],
+            )
+
+            tardiness_vars[job_id] = tardiness
+
     for cluster in clusters:
         name = cluster.name
-        intervals = intervals_by_cluster[name]
-        demands = demands_by_cluster[name]
 
         for resource_name, capacity in (
             ("cpu", cluster.capacity.cpu_cores),
@@ -198,8 +258,8 @@ def optimize_hybrid(
             ("memory", cluster.capacity.memory_gib),
         ):
             model.add_cumulative(
-                intervals,
-                demands[resource_name],
+                intervals_by_cluster[name],
+                demands_by_cluster[name][resource_name],
                 capacity,
             )
 
@@ -222,14 +282,36 @@ def optimize_hybrid(
         for key, selected in assignments.items()
     )
 
+    cloud_cost = sum(
+        costs[key] * selected
+        for key, selected in assignments.items()
+        if next(
+            cluster.provider
+            for cluster in clusters
+            if cluster.name == key[1]
+        ) == "GCP_SIMULATED"
+    )
+
+    total_tardiness = sum(
+        tardiness_vars.values()
+    )
+
+    if max_budget_units is not None:
+        model.add(total_cost <= max_budget_units)
+
+    if max_cloud_budget_units is not None:
+        model.add(
+            cloud_cost <= max_cloud_budget_units
+        )
+
     model.minimize(
         wait_weight * total_waiting
         + makespan_weight * makespan
         + cost_weight * total_cost
+        + deadline_weight * total_tardiness
     )
 
     solver = cp_model.CpSolver()
-
     solver.parameters.max_time_in_seconds = time_limit_s
     solver.parameters.num_workers = 4
     solver.parameters.random_seed = 42
@@ -237,13 +319,16 @@ def optimize_hybrid(
     status = solver.solve(model)
     status_name = solver.status_name(status)
 
-    if status not in (cp_model.OPTIMAL, cp_model.FEASIBLE):
+    if status not in (
+        cp_model.OPTIMAL,
+        cp_model.FEASIBLE,
+    ):
         return HybridOptimizationResult(
-            status_name,
-            float("nan"),
-            0,
-            0,
-            [],
+            status=status_name,
+            objective=float("nan"),
+            makespan_s=0,
+            total_cost_units=0,
+            results=[],
         )
 
     results = []
@@ -261,6 +346,12 @@ def optimize_hybrid(
                     completions[job.job_id]
                 )
 
+                tardiness_s = (
+                    max(0, finish_s - job.deadline_s)
+                    if job.deadline_s is not None
+                    else 0
+                )
+
                 results.append(
                     HybridJobResult(
                         job_id=job.job_id,
@@ -271,12 +362,19 @@ def optimize_hybrid(
                         waiting_s=start_s - job.arrival_s,
                         execution_s=durations[key],
                         cost_units=costs[key],
+                        tardiness_s=tardiness_s,
                     )
                 )
 
                 break
 
-    results.sort(key=lambda result: result.job_id)
+    results.sort(key=lambda r: r.job_id)
+
+    cloud_names = {
+        cluster.name
+        for cluster in clusters
+        if cluster.provider == "GCP_SIMULATED"
+    }
 
     return HybridOptimizationResult(
         status=status_name,
@@ -284,4 +382,15 @@ def optimize_hybrid(
         makespan_s=max(r.finish_s for r in results),
         total_cost_units=sum(r.cost_units for r in results),
         results=results,
+        total_tardiness_s=sum(
+            r.tardiness_s for r in results
+        ),
+        deadline_violations=sum(
+            r.tardiness_s > 0 for r in results
+        ),
+        cloud_cost_units=sum(
+            r.cost_units
+            for r in results
+            if r.cluster in cloud_names
+        ),
     )
