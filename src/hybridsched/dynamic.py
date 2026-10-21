@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 import heapq
+import time
 
 from ortools.sat.python import cp_model
 
@@ -83,6 +84,13 @@ class DynamicHybridSimulator:
         self.running = []
         self.results = []
         self._run_completed = False
+
+        # Rolling-horizon instrumentation.
+        self.planning_window_jobs = 12
+        self.solver_calls = 0
+        self.solver_wall_s = 0.0
+        self.solver_failures = 0
+        self.skipped_plans = 0
 
     def _available(self, cluster):
         return cluster.capacity - self.used[cluster.name]
@@ -202,7 +210,13 @@ class DynamicHybridSimulator:
             return "EMPTY", []
 
         model = cp_model.CpModel()
-        jobs = list(self.waiting)
+        # FCFS admission into the bounded planning window
+        # prevents newer jobs from indefinitely replacing
+        # older jobs in the optimization problem.
+        jobs = sorted(
+            self.waiting,
+            key=lambda job: (job.arrival_s, job.job_id),
+        )[:self.planning_window_jobs]
 
         remaining = max(
             (finish - now for finish, _, _, _ in self.running),
@@ -362,13 +376,22 @@ class DynamicHybridSimulator:
         solver.parameters.num_workers = 4
         solver.parameters.random_seed = 42
 
+        solve_begin = time.perf_counter()
+        self.solver_calls += 1
+
         status = solver.solve(model)
+
+        self.solver_wall_s += (
+            time.perf_counter() - solve_begin
+        )
+
         status_name = solver.status_name(status)
 
         if status not in (
             cp_model.OPTIMAL,
             cp_model.FEASIBLE,
         ):
+            self.solver_failures += 1
             return status_name, []
 
         plan = []
@@ -401,6 +424,16 @@ class DynamicHybridSimulator:
         Return the next planned wake-up time, or None.
         """
         if not self.waiting:
+            return None
+
+        # If no waiting job can fit right now, a running
+        # completion is the next relevant capacity event.
+        # Future arrivals cannot increase free resources.
+        if self.running and not any(
+            self._eligible_now(job)
+            for job in self.waiting
+        ):
+            self.skipped_plans += 1
             return None
 
         status, plan = self._rolling_plan(now)

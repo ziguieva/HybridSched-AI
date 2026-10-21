@@ -119,6 +119,10 @@ def evaluate(count, policy_name, policy):
             for r in results
         ),
         "runtime_wall_s": round(elapsed, 3),
+        "solver_calls": simulator.solver_calls,
+        "solver_wall_s": round(simulator.solver_wall_s, 3),
+        "solver_failures": simulator.solver_failures,
+        "skipped_plans": simulator.skipped_plans,
     }
 
 
@@ -181,6 +185,31 @@ def main():
 
         writer.writeheader()
         writer.writerows(records)
+
+    print("=" * 115)
+    print("ROLLING-CP | SOLVER PROFILING")
+    print("-" * 78)
+    print(
+        f"{'Jobs':>8}"
+        f"{'Calls':>10}"
+        f"{'Solver(s)':>14}"
+        f"{'Failures':>12}"
+        f"{'Skipped':>12}"
+        f"{'Total(s)':>12}"
+    )
+
+    for row in records:
+        if row["policy"] != "ROLLING-CP":
+            continue
+
+        print(
+            f"{row['jobs']:>8}"
+            f"{row['solver_calls']:>10}"
+            f"{row['solver_wall_s']:>14.3f}"
+            f"{row['solver_failures']:>12}"
+            f"{row['skipped_plans']:>12}"
+            f"{row['runtime_wall_s']:>12.3f}"
+        )
 
     print("=" * 115)
     print(f"Results saved: {OUTPUT}")
