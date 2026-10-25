@@ -1,0 +1,7 @@
+dimension,group,count,p10_coverage_pct,p50_coverage_pct,p90_coverage_pct,interval_coverage_pct,mean_width_s
+gpu_demand,GPU_1,46,8.7,45.65,91.3,82.61,207.5
+gpu_demand,GPU_2,44,11.36,61.36,95.45,84.09,187.99
+gpu_demand,GPU_3_PLUS,60,6.67,36.67,91.67,85.0,178.91
+requested_duration,LONG,37,10.81,40.54,75.68,64.86,347.26
+requested_duration,MEDIUM,43,11.63,46.51,97.67,86.05,217.69
+requested_duration,SHORT,70,5.71,50.0,98.57,92.86,90.6
