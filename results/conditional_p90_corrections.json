@@ -1,0 +1,36 @@
+{
+  "fitted_on": "validation_rows_700_849",
+  "corrections_s": {
+    "MEDIUM": 0.0,
+    "SHORT": 0.0,
+    "LONG": 105.1339111328125
+  },
+  "test_coverage_original": {
+    "MEDIUM": [
+      43,
+      97.67441860465117
+    ],
+    "LONG": [
+      37,
+      75.67567567567568
+    ],
+    "SHORT": [
+      70,
+      98.57142857142857
+    ]
+  },
+  "test_coverage_calibrated": {
+    "MEDIUM": [
+      43,
+      97.67441860465117
+    ],
+    "LONG": [
+      37,
+      89.1891891891892
+    ],
+    "SHORT": [
+      70,
+      98.57142857142857
+    ]
+  }
+}

@@ -1,0 +1,6 @@
+policy,makespan_s,mean_wait_s,late_jobs,tardiness_s,cost_units,cloud_jobs,pareto_optimal
+REQUESTED,44867.0,685.51,30.0,71291.0,512721.0,58.0,False
+P50,44724.0,658.88,28.0,67392.0,508107.0,49.0,True
+P90,44868.0,650.71,28.0,63035.0,503162.0,57.0,True
+UNCERTAINTY,45270.0,651.66,27.0,64844.0,493739.0,51.0,True
+CAL_P90,44947,647.1,28,62691,499903,57,True
