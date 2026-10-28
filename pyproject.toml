@@ -13,7 +13,8 @@ dependencies = ["simpy>=4.1,<5"]
 research = [
     "numpy>=2,<3",
     "pandas>=2,<4",
-    "ortools>=9.10,<10"
+    "ortools>=9.10,<10",
+    "matplotlib>=3.8,<4"
 ]
 ml = [
     "scikit-learn>=1.5,<2",
