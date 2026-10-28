@@ -1,0 +1,44 @@
+{
+  "experiment": "STEP24_INDEPENDENT_SYNTHETIC",
+  "protocol_sha256": "9798c80362cb5bd5997a1a93cfc002bf27dbd499d61704353187a98267ea6562",
+  "config": {
+    "experiment": "STEP24_INDEPENDENT_SYNTHETIC",
+    "protocol_version": 1,
+    "status": "frozen_before_evaluation",
+    "seed_start": 24001,
+    "seed_count": 30,
+    "jobs_per_scenario": 150,
+    "policies": [
+      "REQUESTED",
+      "P90",
+      "SLACK",
+      "MULTI"
+    ],
+    "workload": {
+      "interarrival_mean_s": 100,
+      "requested_walltime_min_s": 120,
+      "requested_walltime_max_s": 1800,
+      "deadline_margin_min_s": 100,
+      "deadline_margin_max_s": 600,
+      "runtime_ratio_min": 0.55,
+      "runtime_ratio_max": 1.15
+    },
+    "primary_metrics": [
+      "late_jobs",
+      "tardiness_s",
+      "cost_units"
+    ],
+    "secondary_metrics": [
+      "mean_wait_s",
+      "makespan_s"
+    ],
+    "interpretation": "New synthetic workloads, not external real-world HPC traces"
+  },
+  "models_sha256": {
+    "runtime_xgboost.json": "538aa87d58c8d8dbe7129aed805666ebc8f928ae5d70ce0bf10908df4f3c7b11",
+    "runtime_quantiles.json": "a120e2daccaf38d6da580545e0e11d74b327c98281c8a6c157429b22aaaffc8e"
+  },
+  "results_sha256": "c27af5194ffcc1a243099442672293f8d458b8cbc23581ce4b14d928b86a112f",
+  "total_simulations": 120,
+  "evaluation_type": "independent synthetic generation"
+}

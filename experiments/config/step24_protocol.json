@@ -1,0 +1,33 @@
+{
+  "experiment": "STEP24_INDEPENDENT_SYNTHETIC",
+  "protocol_version": 1,
+  "status": "frozen_before_evaluation",
+  "seed_start": 24001,
+  "seed_count": 30,
+  "jobs_per_scenario": 150,
+  "policies": [
+    "REQUESTED",
+    "P90",
+    "SLACK",
+    "MULTI"
+  ],
+  "workload": {
+    "interarrival_mean_s": 100,
+    "requested_walltime_min_s": 120,
+    "requested_walltime_max_s": 1800,
+    "deadline_margin_min_s": 100,
+    "deadline_margin_max_s": 600,
+    "runtime_ratio_min": 0.55,
+    "runtime_ratio_max": 1.15
+  },
+  "primary_metrics": [
+    "late_jobs",
+    "tardiness_s",
+    "cost_units"
+  ],
+  "secondary_metrics": [
+    "mean_wait_s",
+    "makespan_s"
+  ],
+  "interpretation": "New synthetic workloads, not external real-world HPC traces"
+}
